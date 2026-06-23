@@ -4,7 +4,12 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-from pykrx import stock as krx
+
+try:
+    from pykrx import stock as krx
+    PYKRX_AVAILABLE = True
+except ImportError:
+    PYKRX_AVAILABLE = False
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="CAN SLIM x 터틀 매니저", layout="wide")
