@@ -16,41 +16,70 @@ except ImportError:
 st.set_page_config(page_title="CAN SLIM x 터틀 실전 매니저", layout="wide")
 st.title("🦅 CAN SLIM x 🐢 터틀 트레이딩 실전 자산 매니저")
 st.markdown("""
-티커(종목코드)를 입력하면 **국내 주식 한글명과 해외 주식 이름**을 자동으로 찾아옵니다.
-실전 포지션을 기록하여 실시간 손절 및 추가매수(피라미딩) 타이밍을 효과적으로 관리하세요.
+* **국내 주식**: `.KS`를 붙일 필요 없이 **6자리 숫자**만 입력하고 빈 곳을 누르세요. (예: `005930`, `064260`)
+* **해외 주식**: 기존처럼 영문 티커를 입력하세요. (예: `AAPL`, `TSLA`)
 """)
 
-# --- 고도화된 종목명 조회 함수 ---
+# --- 🔥 [핵심 고도화] 티커 정제 및 종목명 일괄 조회 함수 ---
 @st.cache_data(ttl=86400)
-def get_stock_name(ticker: str) -> str:
-    """국내 종목(.KS/.KQ)은 pykrx로 한글명, 해외 종목은 yfinance로 영문명 조회"""
-    ticker = ticker.strip().upper()
-    if not ticker:
-        return ""
+def resolve_ticker_and_name(raw_ticker: str) -> tuple:
+    """입력된 티커를 기반으로 정제된 티커(yfinance용)와 종목명을 동시에 반환 (정제티커, 종목명)"""
+    raw_ticker = str(raw_ticker).strip().upper()
+    if not raw_ticker or raw_ticker == "NAN":
+        return "", ""
         
-    # 1. 국내 주식 처리 (pykrx 활용)
-    if PYKRX_AVAILABLE and (ticker.endswith(".KS") or ticker.endswith(".KQ")):
-        code = ticker.split(".")[0]
+    # 1. 국내 주식 처리 (6자리 숫자만 입력된 경우)
+    if raw_ticker.isdigit() and len(raw_ticker) == 6:
+        # pykrx 사용 가능 시 시장 감지 및 한글명 추출
+        if PYKRX_AVAILABLE:
+            try:
+                name = krx.get_market_ticker_name(raw_ticker)
+                if name and name.strip() and name != raw_ticker:
+                    kospi_list = krx.get_market_ticker_list(market="KOSPI")
+                    suffix = ".KS" if raw_ticker in kospi_list else ".KQ"
+                    return f"{raw_ticker}{suffix}", name
+            except Exception:
+                pass
+        
+        # pykrx 실패 혹은 미설치 시 yfinance 교차 검증 (.KS -> .KQ 순서로 탐색)
+        for suffix in [".KS", ".KQ"]:
+            test_ticker = f"{raw_ticker}{suffix}"
+            try:
+                tk = yf.Ticker(test_ticker)
+                info = tk.info
+                name = info.get("shortName") or info.get("longName")
+                if name:
+                    if "," in name and test_ticker in name.upper() and raw_ticker == "064260":
+                        return test_ticker, "다날" # 야후 DB 오염 종목 방어
+                    return test_ticker, name
+            except Exception:
+                pass
+        return f"{raw_ticker}.KS", raw_ticker # 최후의 보루
+
+    # 2. 해외 주식 또는 이미 접미사가 붙은 채 들어온 경우
+    else:
+        if PYKRX_AVAILABLE and (raw_ticker.endswith(".KS") or raw_ticker.endswith(".KQ")):
+            pure_code = raw_ticker.split(".")[0]
+            try:
+                name = krx.get_market_ticker_name(pure_code)
+                if name and name.strip() and name != pure_code:
+                    return raw_ticker, name
+            except Exception:
+                pass
+                
         try:
-            name = krx.get_market_ticker_name(code)
-            if name and name.strip():
-                return name
+            tk = yf.Ticker(raw_ticker)
+            info = tk.info
+            name = info.get("shortName") or info.get("longName")
+            if name:
+                if "," in name and raw_ticker in name.upper() and "064260" in raw_ticker:
+                    return raw_ticker, "다날"
+                return raw_ticker, name
         except Exception:
             pass
-        return ticker
+        return raw_ticker, raw_ticker
 
-    # 2. 해외 주식 처리 (yfinance 활용)
-    try:
-        tk = yf.Ticker(ticker)
-        info = tk.info
-        name = info.get("shortName") or info.get("longName")
-        if name:
-            return name
-    except Exception:
-        pass
-    return ticker
-
-# --- 기본 금융 데이터 함수들 ---
+# --- 금융 데이터 연산 함수들 ---
 def get_benchmark_ticker(ticker: str) -> str:
     if ticker.endswith(".KS"): return "^KS11"
     elif ticker.endswith(".KQ"): return "^KQ11"
@@ -125,7 +154,7 @@ risk_per_trade = st.sidebar.slider("1유닛 리스크 비율 (%)", 0.5, 5.0, 1.0
 max_units = st.sidebar.slider("최대 피라미딩 유닛 수", 1, 4, 4)
 apply_market_filter = st.sidebar.checkbox("시장이 하락추세면 매수등급 자동 하향", value=True)
 
-# --- [세션 상태] 실전 포지션 초기화 ---
+# --- [세션 상태] 실전 포지션 마스터 데이터베이스 초기화 ---
 if "active_positions" not in st.session_state:
     st.session_state.active_positions = pd.DataFrame([
         {"티커": "AAPL", "종목명": "Apple Inc.", "실제최초매수가": 175.0, "현재보유유닛": 2},
@@ -136,50 +165,60 @@ if "active_positions" not in st.session_state:
 tab0, tab1, tab2 = st.tabs(["🔥 1. 실전 보유 포지션 관리", "📊 2. CAN SLIM 관심종목 스캐너", "📈 3. 개별 종목 융합 차트"])
 
 # =========================================================
-# 탭 0: 실전 보유 포지션 관리
+# 탭 0: 실전 보유 포지션 관리 (완전 자동완성 브릿지 탑재)
 # =========================================================
 with tab0:
-    st.subheader("🛠️ 보유 포지션 입력 및 편집")
-    st.caption("💡 티커 열에 코드를 입력하고 빈 곳을 누르면 '종목명'이 자동으로 입력됩니다.")
+    st.subheader("🛠| 보유 포지션 입력 및 편집")
+    st.caption("💡 국내 주식은 `005930` 형태로 입력 후 마우스를 빈 곳에 클릭하면 자동으로 이름과 접미사가 완성됩니다.")
     
+    # 1. 에디터 배치
     edited_df = st.data_editor(
         st.session_state.active_positions, 
         num_rows="dynamic", 
         use_container_width=True,
         column_config={
-            "종목명": st.column_config.TextColumn("종목명 (자동 입력)", disabled=True),
-            "티커": st.column_config.TextColumn("티커 (정확히 입력)", required=True),
+            "종목명": st.column_config.TextColumn("종목명 (자동 완성)", disabled=True),
+            "티커": st.column_config.TextColumn("티커 (숫자6자리 또는 해외영문)", required=True),
             "실제최초매수가": st.column_config.NumberColumn("최초 매수가", required=True, min_value=0.0),
             "현재보유유닛": st.column_config.NumberColumn("현재 유닛 수", required=True, min_value=1, max_value=4, default=1)
         }
     )
     
-    # 무한 루프 없는 안전한 자동완성 백엔드 로직
+    # 2. 강력한 셀 변경 가로채기 및 자동 맵핑 백엔드
     names_updated = False
-    for idx, row in edited_df.iterrows():
+    updated_df = edited_df.copy()
+    
+    for idx, row in updated_df.iterrows():
         t = str(row.get("티커", "")).strip().upper()
-        if t:
+        if t and t != "NAN":
             current_name = row.get("종목명", "")
-            if pd.isna(current_name) or current_name == "":
-                fetched_name = get_stock_name(t)
-                edited_df.at[idx, "종목명"] = fetched_name
-                names_updated = True
+            is_pure_digits = t.isdigit() and len(t) == 6
+            
+            # 숫자 6자리만 쳐졌거나, 혹은 종목명이 유실된 빈 칸일 경우 강제 정제 구동
+            if is_pure_digits or pd.isna(current_name) or current_name == "" or current_name == t:
+                with st.spinner("종목 정보를 파싱하고 있습니다..."):
+                    sanitized_ticker, fetched_name = resolve_ticker_and_name(t)
                 
-    st.session_state.active_positions = edited_df
+                if updated_df.at[idx, "티커"] != sanitized_ticker or updated_df.at[idx, "종목명"] != fetched_name:
+                    updated_df.at[idx, "티커"] = sanitized_ticker
+                    updated_df.at[idx, "종목명"] = fetched_name
+                    names_updated = True
+                    
+    st.session_state.active_positions = updated_df
     if names_updated:
-        st.rerun()
+        st.rerun() # 변경 즉시 화면을 갱신하여 표에 입력되도록 만듬
 
     st.divider()
     st.subheader("🚨 실시간 보유 포지션 대응 알림판")
 
     real_management_data = []
-    for _, row in edited_df.iterrows():
+    for _, row in updated_df.iterrows():
         ticker = str(row.get("티커", "")).strip().upper()
         init_price = row.get("실제최초매수가")
-        held_units = row.get("currently_units" if "currently_units" in row else row.get("현재보유유닛"))
+        held_units = row.get("현재보유유닛")
         stock_name = row.get("종목명", "")
         
-        if not ticker or pd.isna(init_price) or pd.isna(held_units): continue
+        if not ticker or pd.isna(init_price) or pd.isna(held_units) or ticker == "NAN": continue
         
         df = load_and_process_data(ticker, entry_window, exit_window)
         if df is not None and not df.empty:
@@ -199,7 +238,7 @@ with tab0:
                 action_guide = "🚨 즉시 매도 (채널 청산선 탈락!)"
                 status_color = "🔴"
             elif held_units < max_units and c_price >= next_pyramid_price:
-                action_guide = f"➕ 증액 추천 (+1유닛 추가 매수 완료 기준가: {round(next_pyramid_price, 2)})"
+                action_guide = f"➕ 증액 추천 (+1유닛 추가 매수 기준가: {round(next_pyramid_price, 2)})"
                 status_color = "🔵"
             else:
                 action_guide = "🟢 정상 보유 (추세 유지 중)"
@@ -209,7 +248,7 @@ with tab0:
             
             real_management_data.append({
                 "상태": status_color,
-                "종목명": stock_name if stock_name else get_stock_name(ticker),
+                "종목명": stock_name,
                 "티커": ticker,
                 "현재가": round(c_price, 2),
                 "최초 매수가": round(init_price, 2),
@@ -227,13 +266,23 @@ with tab0:
         st.info("포지션을 입력하시면 실시간 대응 분석표가 이곳에 출력됩니다.")
 
 # =========================================================
-# 탭 1: CAN SLIM 관심종목 스캐너
+# 탭 1: CAN SLIM 관심종목 스캐너 (간편 숫자 필터 적용)
 # =========================================================
 with tab1:
     st.subheader("🔍 관심종목 발굴 스캐너")
-    tickers_input = st.text_input("스캔할 관심 종목 리스트 (쉼표 구분)", "AAPL, MSFT, NVDA, TSLA, 005930.KS")
-    scan_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
+    tickers_input = st.text_input("스캔할 관심 종목 리스트 (쉼표 구분 - 국내 주식은 숫자만 입력 가능)", "AAPL, MSFT, 005930, 064260")
     
+    scan_tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
+    scan_tickers = []
+    ticker_to_name = {}
+    
+    # 스캐너에서도 숫자만 입력하면 자동 정제 가동
+    for t in scan_tickers_raw:
+        sanitized_t, name = resolve_ticker_and_name(t)
+        if sanitized_t:
+            scan_tickers.append(sanitized_t)
+            ticker_to_name[sanitized_t] = name
+            
     unique_benchmarks = set(get_benchmark_ticker(t) for t in scan_tickers)
     market_trend_map = {b: get_market_trend(b) for b in unique_benchmarks}
     
@@ -265,10 +314,8 @@ with tab1:
             rs_val = rs_ratings.get(ticker, 50)
             cond_rs = rs_val >= 70 if rs_val else False
             vol_info = compute_volume_signal(df)
-            cond_vol = vol_info["signal"] == "🟢 매집"
             
-            canslim_score = trend_score + int(cond_rs) + int(cond_vol)
-            
+            canslim_score = trend_score + int(cond_rs) + int(vol_info["signal"] == "🟢 매집")
             bench = get_benchmark_ticker(ticker)
             market_bearish = "하락추세" in market_trend_map.get(bench, {}).get("status", "")
             
@@ -279,7 +326,7 @@ with tab1:
             status_text = f"🟠 시장약세로 보류 ({canslim_score}/9)" if apply_market_filter and market_bearish and base_status == "강력 매수 고려" else f"{base_emoji} {base_status} ({canslim_score}/9)"
             
             scan_data.append({
-                "종목명": get_stock_name(ticker),
+                "종목명": ticker_to_name.get(ticker, ticker),
                 "티커": ticker,
                 "CAN SLIM 점수": status_text,
                 "RS Rating": rs_val if rs_val else "-",
@@ -296,11 +343,11 @@ with tab1:
 # =========================================================
 with tab2:
     st.subheader("📈 개별 종목 정밀 융합 차트")
-    all_known_tickers = list(set(scan_tickers + [str(r.get("티커", "")).upper() for _, r in edited_df.iterrows() if r.get("티커")]))
-    all_known_tickers = [t for t in all_known_tickers if t]
+    all_known_tickers = list(set(scan_tickers + [str(r.get("티커", "")).upper() for _, r in updated_df.iterrows() if r.get("티커")]))
+    all_known_tickers = [t for t in all_known_tickers if t and t != "NAN"]
     
     if all_known_tickers:
-        selected_ticker = st.selectbox("분석할 종목을 선택하세요", options=all_known_tickers, format_func=lambda x: f"{get_stock_name(x)} ({x})")
+        selected_ticker = st.selectbox("분석할 종목을 선택하세요", options=all_known_tickers, format_func=lambda x: f"{resolve_ticker_and_name(x)[1]} ({x})")
         
         df_chart = load_and_process_data(selected_ticker, entry_window, exit_window)
         if df_chart is not None and not df_chart.empty:
@@ -320,10 +367,9 @@ with tab2:
             fig.add_trace(go.Scatter(x=buy_signals.index, y=buy_signals['Close'], mode='markers', marker=dict(symbol='triangle-up', color='green', size=13), name='터틀 돌파'))
             fig.add_trace(go.Scatter(x=sell_signals.index, y=sell_signals['Close'], mode='markers', marker=dict(symbol='triangle-down', color='red', size=13), name='터틀 이탈'))
             
-            fig.update_layout(title=f'{get_stock_name(selected_ticker)} ({selected_ticker}) — 분석 차트', xaxis_rangeslider_visible=False, template='plotly_white', height=600)
+            fig.update_layout(title=f'{resolve_ticker_and_name(selected_ticker)[1]} ({selected_ticker}) — 분석 차트', xaxis_rangeslider_visible=False, template='plotly_white', height=600)
             st.plotly_chart(fig, use_container_width=True)
             
-            # 피라미딩 구조 테이블 복구
             st.subheader("🐢 터틀 피라미딩 & 손절 세부 계획")
             latest = df_chart.iloc[-1]
             atr = latest['ATR']
