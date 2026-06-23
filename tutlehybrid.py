@@ -16,8 +16,8 @@ except ImportError:
 st.set_page_config(page_title="CAN SLIM x 터틀 실전 매니저", layout="wide")
 st.title("🦅 CAN SLIM x 🐢 터틀 트레이딩 실전 자산 매니저")
 st.markdown("""
-티커(종목코드)를 입력하면 **국내 주식(Name)과 해외 주식(Short Name)**을 자동으로 찾아옵니다.
-포지션을 입력하여 실시간 손절 및 추가매수(피라미딩) 타이밍을 관리하세요.
+티커(종목코드)를 입력하면 **국내 주식 한글명과 해외 주식 이름**을 자동으로 찾아옵니다.
+실전 포지션을 기록하여 실시간 손절 및 추가매수(피라미딩) 타이밍을 효과적으로 관리하세요.
 """)
 
 # --- 고도화된 종목명 조회 함수 ---
@@ -42,14 +42,13 @@ def get_stock_name(ticker: str) -> str:
     # 2. 해외 주식 처리 (yfinance 활용)
     try:
         tk = yf.Ticker(ticker)
-        # .info 가 블로킹될 때를 대비해 가벼운 fast_info나 구형 데이터 구조 교차 검증
         info = tk.info
         name = info.get("shortName") or info.get("longName")
         if name:
             return name
     except Exception:
         pass
-    return ticker # 실패 시 티커 자체를 반환
+    return ticker
 
 # --- 기본 금융 데이터 함수들 ---
 def get_benchmark_ticker(ticker: str) -> str:
@@ -126,7 +125,7 @@ risk_per_trade = st.sidebar.slider("1유닛 리스크 비율 (%)", 0.5, 5.0, 1.0
 max_units = st.sidebar.slider("최대 피라미딩 유닛 수", 1, 4, 4)
 apply_market_filter = st.sidebar.checkbox("시장이 하락추세면 매수등급 자동 하향", value=True)
 
-# --- [세션 상태] 실전 포지션 초기 데이터베이스 ---
+# --- [세션 상태] 실전 포지션 초기화 ---
 if "active_positions" not in st.session_state:
     st.session_state.active_positions = pd.DataFrame([
         {"티커": "AAPL", "종목명": "Apple Inc.", "실제최초매수가": 175.0, "현재보유유닛": 2},
@@ -137,13 +136,12 @@ if "active_positions" not in st.session_state:
 tab0, tab1, tab2 = st.tabs(["🔥 1. 실전 보유 포지션 관리", "📊 2. CAN SLIM 관심종목 스캐너", "📈 3. 개별 종목 융합 차트"])
 
 # =========================================================
-# 탭 0: 실전 보유 포지션 관리 (종목명 자동 완성 기능 탑재)
+# 탭 0: 실전 보유 포지션 관리
 # =========================================================
 with tab0:
     st.subheader("🛠️ 보유 포지션 입력 및 편집")
-    st.caption("💡 티커 열에 코드를 입력하고 빈 곳을 누르면 '종목명'이 자동으로 입력됩니다. (국내 주식은 뒤에 .KS 또는 .KQ 필수)")
+    st.caption("💡 티커 열에 코드를 입력하고 빈 곳을 누르면 '종목명'이 자동으로 입력됩니다.")
     
-    # 데이터 에디터 배치 및 열 제어
     edited_df = st.data_editor(
         st.session_state.active_positions, 
         num_rows="dynamic", 
@@ -156,30 +154,30 @@ with tab0:
         }
     )
     
-    # 사용자가 티커를 새로 썼을 때 종목명을 동적으로 매핑하는 백엔드 로직
+    # 무한 루프 없는 안전한 자동완성 백엔드 로직
     names_updated = False
     for idx, row in edited_df.iterrows():
-        t = str(row["티커"]).strip().upper() if pd.notna(row["티ker"] if "티ker" in row else row.get("티커")) else ""
+        t = str(row.get("티커", "")).strip().upper()
         if t:
-            current_name = row.get("종목명")
-            if pd.isna(current_name) or current_name == "" or current_name == t:
+            current_name = row.get("종목명", "")
+            if pd.isna(current_name) or current_name == "":
                 fetched_name = get_stock_name(t)
                 edited_df.at[idx, "종목명"] = fetched_name
                 names_updated = True
                 
     st.session_state.active_positions = edited_df
     if names_updated:
-        st.rerun() # 자동 입력을 UI에 즉시 반영
+        st.rerun()
 
     st.divider()
     st.subheader("🚨 실시간 보유 포지션 대응 알림판")
 
     real_management_data = []
     for _, row in edited_df.iterrows():
-        ticker = str(row["티커"]).strip().upper() if pd.notna(row["티커"]) else ""
-        init_price = row["실제최초매수가"]
-        held_units = row["현재보유유닛"]
-        stock_name = row["종목명"]
+        ticker = str(row.get("티커", "")).strip().upper()
+        init_price = row.get("실제최초매수가")
+        held_units = row.get("currently_units" if "currently_units" in row else row.get("현재보유유닛"))
+        stock_name = row.get("종목명", "")
         
         if not ticker or pd.isna(init_price) or pd.isna(held_units): continue
         
@@ -190,69 +188,4 @@ with tab0:
             atr = float(latest['ATR'])
             exit_channel = float(latest['Exit_Low'])
             
-            # 터틀 계산식
-            latest_unit_price = init_price + (0.5 * atr * (held_units - 1))
-            actual_stop_loss = latest_unit_price - (2 * atr)
-            next_pyramid_price = init_price + (0.5 * atr * held_units)
-            
-            if c_price <= actual_stop_loss:
-                action_guide = "🚨 즉시 매도 (2N 실전 손절선 탈락!)"
-                status_color = "🔴"
-            elif c_price <= exit_channel:
-                action_guide = "🚨 즉시 매도 (채널 청산선 탈락!)"
-                status_color = "🔴"
-            elif held_units < max_units and c_price >= next_pyramid_price:
-                action_guide = f"➕ 증액 추천 (+1유닛 추가 매수 기준가: {round(next_pyramid_price, 2)})"
-                status_color = "🔵"
-            else:
-                action_guide = "🟢 정상 보유 (추세 유지 중)"
-                status_color = "🟢"
-                
-            pnl_pct = ((c_price - init_price) / init_price) * 100
-            
-            real_management_data.append({
-                "상태": status_color,
-                "종목명": stock_name if stock_name else get_stock_name(ticker),
-                "티커": ticker,
-                "현재가": round(c_price, 2),
-                "최초 매수가": round(init_price, 2),
-                "보유 유닛": f"{held_units} / {max_units}",
-                "수익률": f"{pnl_pct:+.2f}%",
-                "실전 손절가(2N)": round(actual_stop_loss, 2),
-                "채널 청산선": round(exit_channel, 2),
-                "다음 증액 목표가": round(next_pyramid_price, 2) if held_units < max_units else "최대 유닛",
-                "실시간 대응 가이드": action_guide
-            })
-            
-    if real_management_data:
-        st.dataframe(pd.DataFrame(real_management_data), use_container_width=True, hide_index=True)
-    else:
-        st.info("포지션을 입력하시면 실시간 대응 분석표가 이곳에 출력됩니다.")
-
-# =========================================================
-# 탭 1 & 2: 관심종목 스캐너 및 차트 (종목명 노출 강화)
-# =========================================================
-with tab1:
-    st.subheader("🌐 시장 방향성(M) 및 관심종목 발굴")
-    tickers_input = st.text_input("스캔할 관심 종목 리스트", "AAPL, MSFT, NVDA, TSLA, 005930.KS")
-    scan_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
-    
-    scan_data = []
-    for ticker in scan_tickers:
-        df = load_and_process_data(ticker, entry_window, exit_window)
-        if df is not None and not df.empty:
-            latest = df.iloc[-1]
-            scan_data.append({
-                "종목명": get_stock_name(ticker),
-                "티커": ticker,
-                "현재가": round(latest['Close'], 2),
-                "터틀 진입선": round(latest['Entry_High'], 2),
-                "터틀 청산선": round(latest['Exit_Low'], 2)
-            })
-    if scan_data:
-        st.dataframe(pd.DataFrame(scan_data), use_container_width=True, hide_index=True)
-
-with tab2:
-    all_known_tickers = list(set(scan_tickers + [str(r.get("티커")).upper() for _, r in edited_df.iterrows() if pd.notna(r.get("티커"))]))
-    selected_ticker = st.selectbox("정밀 분석 차트 대상 선택",高度 = all_known_tickers, format_func=lambda x: f"{get_stock_name(x)} ({x})")
-    st.caption(f"선택된 종목: **{get_stock_name(selected_ticker)}**")
+            latest_unit_price = init_price + (0.5 * atr * (held
