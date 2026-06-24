@@ -47,8 +47,8 @@ def resolve_ticker_and_name(raw_ticker: str) -> tuple:
                 info = tk.info
                 name = info.get("shortName") or info.get("longName")
                 if name:
-                    if "," in name and test_ticker in name.upper() and raw_ticker == "064260":
-                        return test_ticker, "다날"
+                    if "," in name and test_ticker in name.upper() and raw_ticker == "066570":
+                        return test_ticker, "LG전자"
                     return test_ticker, name
             except Exception:
                 pass
@@ -70,8 +70,8 @@ def resolve_ticker_and_name(raw_ticker: str) -> tuple:
             info = tk.info
             name = info.get("shortName") or info.get("longName")
             if name:
-                if "," in name and raw_ticker in name.upper() and "064260" in raw_ticker:
-                    return raw_ticker, "다날"
+                if "," in name and raw_ticker in name.upper() and "066570" in raw_ticker:
+                    return raw_ticker, "LG전자"
                 return raw_ticker, name
         except Exception:
             pass
@@ -276,7 +276,7 @@ with tab0:
 # =========================================================
 with tab1:
     st.subheader("🔍 관심종목 발굴 스캐너")
-    tickers_input = st.text_input("스캔할 관심 종목 리스트 (쉼표 구분 - 국내 주식은 숫자만 입력 가능)", "AAPL, MSFT, 005930, 064260")
+    tickers_input = st.text_input("스캔할 관심 종목 리스트 (쉼표 구분 - 국내 주식은 숫자만 입력 가능)", "AAPL, 005930, 000660,066570,005380,")
     
     scan_tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     scan_tickers = []
