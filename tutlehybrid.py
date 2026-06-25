@@ -283,7 +283,7 @@ with tab0:
 # =========================================================
 with tab1:
     st.subheader("🔍 관심종목 발굴 스캐너")
-    tickers_input = st.text_input("스캔할 관심 종목 리스트 (쉼표 구분 - 국내 주식은 숫자만 입력 가능)", "AAPL, 005930")
+    tickers_input = st.text_input("스캔할 관심 종목 리스트 (쉼표 구분 - 국내 주식은 숫자만 입력 가능)", "AAPL, MSFT, 005930, 064260")
     
     scan_tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     scan_tickers = []
@@ -357,3 +357,64 @@ with tab1:
         csv_data_scan = scan_df.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
             label="📥 관심종목 스캐너 엑셀(CSV) 다운로드",
+            data=csv_data_scan,
+            file_name=f"Scanner_Results_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            key='download_scanner'
+        )
+
+# =========================================================
+# 탭 2: 개별 종목 융합 차트 및 세부 계획
+# =========================================================
+with tab2:
+    st.subheader("📈 개별 종목 정밀 융합 차트")
+    all_known_tickers = list(set(scan_tickers + [str(r.get("티커", "")).upper() for _, r in updated_df.iterrows() if r.get("티ker")]))
+    all_known_tickers = [t for t in all_known_tickers if t and t != "NAN"]
+    
+    if all_known_tickers:
+        selected_ticker = st.selectbox("분석할 종목을 선택하세요", options=all_known_tickers, format_func=lambda x: f"{resolve_ticker_and_name(x)[1]} ({x})")
+        
+        df_chart = load_and_process_data(selected_ticker, entry_window, exit_window)
+        if df_chart is not None and not df_chart.empty:
+            df_plot = df_chart.tail(200).copy()
+            df_plot['Buy_Signal'] = (df_plot['Close'] > df_plot['Entry_High']) & (df_plot['Close'].shift(1) <= df_plot['Entry_High'].shift(1))
+            df_plot['Sell_Signal'] = (df_plot['Close'] < df_plot['Exit_Low']) & (df_plot['Close'].shift(1) >= df_plot['Exit_Low'].shift(1))
+            
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(x=df_plot.index, open=df_plot['Open'], high=df_plot['High'], low=df_plot['Low'], close=df_plot['Close'], name='가격'))
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['SMA_50'], line=dict(color='orange', width=1.5), name='50일선'))
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['SMA_200'], line=dict(color='purple', width=2), name='200일선'))
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Entry_High'], line=dict(color='blue', dash='dot'), name='터틀 진입선'))
+            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Exit_Low'], line=dict(color='red', dash='dot'), name='터틀 청산선'))
+            
+            buy_signals = df_plot[df_plot['Buy_Signal']]
+            sell_signals = df_plot[df_plot['Sell_Signal']]
+            fig.add_trace(go.Scatter(x=buy_signals.index, y=buy_signals['Close'], mode='markers', marker=dict(symbol='triangle-up', color='green', size=13), name='터틀 돌파'))
+            fig.add_trace(go.Scatter(x=sell_signals.index, y=sell_signals['Close'], mode='markers', marker=dict(symbol='triangle-down', color='red', size=13), name='터틀 이탈'))
+            
+            fig.update_layout(title=f'{resolve_ticker_and_name(selected_ticker)[1]} ({selected_ticker}) — 분석 차트', xaxis_rangeslider_visible=False, template='plotly_white', height=600)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.subheader("🐢 터틀 피라미딩 & 손절 세부 계획")
+            latest = df_chart.iloc[-1]
+            atr = latest['ATR']
+            entry_price = latest['Entry_High']
+            
+            if not pd.isna(atr) and not pd.isna(entry_price) and atr > 0:
+                risk_amount = account_size * risk_per_trade
+                unit_shares = int(risk_amount / atr)
+                
+                plan_rows = []
+                for unit_n in range(1, max_units + 1):
+                    add_price = entry_price + 0.5 * atr * (unit_n - 1)
+                    plan_rows.append({
+                        "유닛 단계": f"{unit_n}유닛",
+                        "추가 매수 기준가": round(add_price, 2),
+                        "유닛당 매수량": f"{unit_shares} 주",
+                        "최종 누적 물량": f"{unit_shares * unit_n} 주",
+                    })
+                st.dataframe(pd.DataFrame(plan_rows), use_container_width=True, hide_index=True)
+        else:
+            st.warning("해당 종목의 차트 데이터를 불러올 수 없습니다.")
+    else:
+        st.info("스캐너 혹은 포지션 관리 테이블에 종목을 입력하시면 차트 탭이 활성화됩니다.")
