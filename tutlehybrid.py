@@ -16,19 +16,17 @@ except ImportError:
 st.set_page_config(page_title="CAN SLIM x 터틀 실전 매니저", layout="wide")
 st.title("🦅 CAN SLIM x 🐢 터틀 트레이딩 실전 자산 매니저")
 st.markdown("""
-* **국내 주식**: `.KS`를 붙일 필요 없이 **6자리 숫자**만 입력하고 빈 곳을 누르세요. (예: `005930`)
+* **국내 주식**: `.KS`를 붙일 필요 없이 **6자리 숫자**만 입력하고 빈 곳을 누르세요. (예: `005930`, `000660`)
 * **해외 주식**: 기존처럼 영문 티커를 입력하세요. (예: `AAPL`, `TSLA`)
 """)
 
-# --- [핵심 고도화] 티커 정제 및 종목명 일괄 조회 함수 ---
+# --- 티커 정제 및 종목명 일괄 조회 함수 ---
 @st.cache_data(ttl=86400)
 def resolve_ticker_and_name(raw_ticker: str) -> tuple:
-    """입력된 티커를 기반으로 정제된 티커(yfinance용)와 종목명을 동시에 반환 (정제티커, 종목명)"""
     raw_ticker = str(raw_ticker).strip().upper()
     if not raw_ticker or raw_ticker == "NAN":
         return "", ""
         
-    # 1. 국내 주식 처리 (6자리 숫자만 입력된 경우)
     if raw_ticker.isdigit() and len(raw_ticker) == 6:
         if PYKRX_AVAILABLE:
             try:
@@ -47,14 +45,11 @@ def resolve_ticker_and_name(raw_ticker: str) -> tuple:
                 info = tk.info
                 name = info.get("shortName") or info.get("longName")
                 if name:
-                    if "," in name and test_ticker in name.upper() and raw_ticker == "005930":
-                        return test_ticker, "삼성"
                     return test_ticker, name
             except Exception:
                 pass
         return f"{raw_ticker}.KS", raw_ticker
 
-    # 2. 해외 주식 또는 이미 접미사가 붙은 채 들어온 경우
     else:
         if PYKRX_AVAILABLE and (raw_ticker.endswith(".KS") or raw_ticker.endswith(".KQ")):
             pure_code = raw_ticker.split(".")[0]
@@ -70,8 +65,6 @@ def resolve_ticker_and_name(raw_ticker: str) -> tuple:
             info = tk.info
             name = info.get("shortName") or info.get("longName")
             if name:
-                if "," in name and raw_ticker in name.upper() and "005930" in raw_ticker:
-                    return raw_ticker, "삼성"
                 return raw_ticker, name
         except Exception:
             pass
@@ -139,7 +132,6 @@ def load_and_process_data(ticker, entry_w, exit_w):
         df['Entry_High'] = df['High'].rolling(entry_w).max().shift(1)
         df['Exit_Low'] = df['Low'].rolling(exit_w).min().shift(1)
         
-        # --- 💥 ATR (주가 변동성 백분위 계산용 공식) ---
         ranges = pd.concat([df['High']-df['Low'], np.abs(df['High']-df['Close'].shift(1)), np.abs(df['Low']-df['Close'].shift(1))], axis=1)
         df['ATR'] = ranges.max(axis=1).rolling(20).mean()
         return df
@@ -149,16 +141,17 @@ def load_and_process_data(ticker, entry_w, exit_w):
 st.sidebar.header("⚙️ 시스템 및 자금 관리 설정")
 system_type = st.sidebar.radio("터틀 시스템 선택", ("시스템 1 (20일 돌파)", "시스템 2 (55일 돌파)"))
 entry_window, exit_window = (20, 10) if system_type == "시스템 1 (20일 돌파)" else (55, 20)
-account_size = st.sidebar.number_input("총 투자 자본금", value=100000, step=10000)
+account_size = st.sidebar.number_input("총 투자 자본금", value=10000000, step=1000000)
 risk_per_trade = st.sidebar.slider("1유닛 리스크 비율 (%)", 0.5, 5.0, 1.0, 0.1) / 100
 max_units = st.sidebar.slider("최대 피라미딩 유닛 수", 1, 4, 4)
 apply_market_filter = st.sidebar.checkbox("시장이 하락추세면 매수등급 자동 하향", value=True)
 
-# --- [세션 상태] 실전 포지션 마스터 데이터베이스 초기화 ---
+# --- [세션 상태] 실전 포지션 마스터 데이터베이스 초기화 (예시 종목 변경) ---
 if "active_positions" not in st.session_state:
     st.session_state.active_positions = pd.DataFrame([
-        {"티커": "AAPL", "종목명": "Apple Inc.", "실제최초매수가": 175.0, "현재보유유닛": 2},
-        {"티커": "005930.KS", "종목명": "삼성전자", "실제최초매수가": 72000.0, "현재보유유닛": 1}
+        {"티커": "005930", "종목명": "삼성전자", "실제최초매수가": 75000.0, "현재보유유닛": 1},
+        {"티커": "000660", "종목명": "SK하이닉스", "실제최초매수가": 180000.0, "현재보유유닛": 2},
+        {"티커": "066570", "종목명": "LG전자", "실제최초매수가": 100000.0, "현재보유유닛": 1}
     ])
 
 # --- 탭 구성 ---
@@ -169,7 +162,7 @@ tab0, tab1, tab2 = st.tabs(["🔥 1. 실전 보유 포지션 관리", "📊 2. C
 # =========================================================
 with tab0:
     st.subheader("🛠| 보유 포지션 입력 및 편집")
-    st.caption("💡 국내 주식은 `005930` 형태로 입력 후 마우스를 빈 곳에 클릭하면 자동으로 이름과 접미사가 완성됩니다.")
+    st.caption("💡 국내 주식은 숫자만 입력 후 마우스를 빈 곳에 클릭하면 자동으로 이름과 접미사가 완성됩니다.")
     
     edited_df = st.data_editor(
         st.session_state.active_positions, 
@@ -221,14 +214,13 @@ with tab0:
         if df is not None and not df.empty:
             latest = df.iloc[-1]
             c_price = float(latest['Close'])
-            atr = float(latest['ATR']) # 💥 최신 ATR 자동 계산 데이터 추출
+            atr = float(latest['ATR'])
             exit_channel = float(latest['Exit_Low'])
             
             latest_unit_price = init_price + (0.5 * atr * (held_units - 1))
             actual_stop_loss = latest_unit_price - (2 * atr)
             next_pyramid_price = init_price + (0.5 * atr * held_units)
             
-            # 터틀 자금 관리 기반 1유닛당 적정 매수 수량 계산 (자산의 N% 리스크 / ATR)
             risk_amount = account_size * risk_per_trade
             unit_shares = int(risk_amount / atr) if atr > 0 else 0
             
@@ -252,8 +244,8 @@ with tab0:
                 "종목명": stock_name,
                 "티커": ticker,
                 "현재가": round(c_price, 2),
-                "최신 ATR(20N)": round(atr, 2), # 💥 실시간 ATR 자동 표기 열 추가
-                "추천 1유닛 수량": f"{unit_shares} 주", # 💥 ATR 기반 투자수량 자동 계산 열 추가
+                "최신 ATR(20N)": round(atr, 2),
+                "추천 1유닛 수량": f"{unit_shares} 주",
                 "최초 매수가": round(init_price, 2),
                 "보유 유닛": f"{held_units} / {max_units}",
                 "수익률": f"{pnl_pct:+.2f}%",
@@ -283,7 +275,8 @@ with tab0:
 # =========================================================
 with tab1:
     st.subheader("🔍 관심종목 발굴 스캐너")
-    tickers_input = st.text_input("스캔할 관심 종목 리스트 (쉼표 구분 - 국내 주식은 숫자만 입력 가능)", "AAPL, MSFT, 005930, 064260")
+    # 예시 종목 변경 (삼성전자, SK하이닉스, LG전자)
+    tickers_input = st.text_input("스캔할 관심 종목 리스트 (쉼표 구분 - 국내 주식은 숫자만 입력 가능)", "005930, 000660, 066570")
     
     scan_tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     scan_tickers = []
@@ -313,7 +306,7 @@ with tab1:
         if df is not None and not df.empty:
             latest = df.iloc[-1]
             c_price = latest['Close']
-            scan_atr = latest['ATR'] # 💥 스캐너 탭에서도 ATR 추출
+            scan_atr = latest['ATR']
             
             cond1 = (c_price > latest['SMA_150']) and (c_price > latest['SMA_200'])
             cond2 = latest['SMA_150'] > latest['SMA_200']
@@ -345,7 +338,7 @@ with tab1:
                 "RS Rating": rs_val if rs_val else "-",
                 "수급 신호": vol_info["signal"],
                 "현재가": round(c_price, 2),
-                "최신 ATR": round(scan_atr, 2), # 💥 관심종목 표에도 ATR 자동 계산 열 추가
+                "최신 ATR": round(scan_atr, 2),
                 "터틀 진입선": round(latest['Entry_High'], 2),
                 "터틀 청산선": round(latest['Exit_Low'], 2)
             })
@@ -368,7 +361,8 @@ with tab1:
 # =========================================================
 with tab2:
     st.subheader("📈 개별 종목 정밀 융합 차트")
-    all_known_tickers = list(set(scan_tickers + [str(r.get("티커", "")).upper() for _, r in updated_df.iterrows() if r.get("티ker")]))
+    # '티ker' 오타 수정 완료
+    all_known_tickers = list(set(scan_tickers + [str(r.get("티커", "")).upper() for _, r in updated_df.iterrows() if r.get("티커")]))
     all_known_tickers = [t for t in all_known_tickers if t and t != "NAN"]
     
     if all_known_tickers:
