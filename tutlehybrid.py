@@ -14,13 +14,13 @@ except ImportError:
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="CAN SLIM x 터틀 실전 매니저", layout="wide")
-st.title("🦅 CAN SLIM x 🐢 터틀 트레이딩 매니저")
+st.title("🦅 CAN SLIM x 🐢 터틀 트레이딩 실전 자산 매니저")
 st.markdown("""
-* **국내 주식**: `.KS`를 붙일 필요 없이 **6자리 숫자**만 입력하고 빈 곳을 누르세요. (예: `005930`, `064260`)
+* **국내 주식**: `.KS`를 붙일 필요 없이 **6자리 숫자**만 입력하고 빈 곳을 누르세요. (예: `005930`)
 * **해외 주식**: 기존처럼 영문 티커를 입력하세요. (예: `AAPL`, `TSLA`)
 """)
 
-# --- 🔥 [핵심 고도화] 티커 정제 및 종목명 일괄 조회 함수 ---
+# --- [핵심 고도화] 티커 정제 및 종목명 일괄 조회 함수 ---
 @st.cache_data(ttl=86400)
 def resolve_ticker_and_name(raw_ticker: str) -> tuple:
     """입력된 티커를 기반으로 정제된 티커(yfinance용)와 종목명을 동시에 반환 (정제티커, 종목명)"""
@@ -47,8 +47,8 @@ def resolve_ticker_and_name(raw_ticker: str) -> tuple:
                 info = tk.info
                 name = info.get("shortName") or info.get("longName")
                 if name:
-                    if "," in name and test_ticker in name.upper() and raw_ticker == "066570":
-                        return test_ticker, "LG전자"
+                    if "," in name and test_ticker in name.upper() and raw_ticker == "005930":
+                        return test_ticker, "삼성"
                     return test_ticker, name
             except Exception:
                 pass
@@ -70,8 +70,8 @@ def resolve_ticker_and_name(raw_ticker: str) -> tuple:
             info = tk.info
             name = info.get("shortName") or info.get("longName")
             if name:
-                if "," in name and raw_ticker in name.upper() and "066570" in raw_ticker:
-                    return raw_ticker, "LG전자"
+                if "," in name and raw_ticker in name.upper() and "005930" in raw_ticker:
+                    return raw_ticker, "삼성"
                 return raw_ticker, name
         except Exception:
             pass
@@ -138,6 +138,8 @@ def load_and_process_data(ticker, entry_w, exit_w):
         df['SMA_200_Trend'] = df['SMA_200'] > df['SMA_200'].shift(20)
         df['Entry_High'] = df['High'].rolling(entry_w).max().shift(1)
         df['Exit_Low'] = df['Low'].rolling(exit_w).min().shift(1)
+        
+        # --- 💥 ATR (주가 변동성 백분위 계산용 공식) ---
         ranges = pd.concat([df['High']-df['Low'], np.abs(df['High']-df['Close'].shift(1)), np.abs(df['Low']-df['Close'].shift(1))], axis=1)
         df['ATR'] = ranges.max(axis=1).rolling(20).mean()
         return df
@@ -219,12 +221,16 @@ with tab0:
         if df is not None and not df.empty:
             latest = df.iloc[-1]
             c_price = float(latest['Close'])
-            atr = float(latest['ATR'])
+            atr = float(latest['ATR']) # 💥 최신 ATR 자동 계산 데이터 추출
             exit_channel = float(latest['Exit_Low'])
             
             latest_unit_price = init_price + (0.5 * atr * (held_units - 1))
             actual_stop_loss = latest_unit_price - (2 * atr)
             next_pyramid_price = init_price + (0.5 * atr * held_units)
+            
+            # 터틀 자금 관리 기반 1유닛당 적정 매수 수량 계산 (자산의 N% 리스크 / ATR)
+            risk_amount = account_size * risk_per_trade
+            unit_shares = int(risk_amount / atr) if atr > 0 else 0
             
             if c_price <= actual_stop_loss:
                 action_guide = "🚨 즉시 매도 (2N 실전 손절선 탈락!)"
@@ -246,6 +252,8 @@ with tab0:
                 "종목명": stock_name,
                 "티커": ticker,
                 "현재가": round(c_price, 2),
+                "최신 ATR(20N)": round(atr, 2), # 💥 실시간 ATR 자동 표기 열 추가
+                "추천 1유닛 수량": f"{unit_shares} 주", # 💥 ATR 기반 투자수량 자동 계산 열 추가
                 "최초 매수가": round(init_price, 2),
                 "보유 유닛": f"{held_units} / {max_units}",
                 "수익률": f"{pnl_pct:+.2f}%",
@@ -259,7 +267,6 @@ with tab0:
         res_df = pd.DataFrame(real_management_data)
         st.dataframe(res_df, use_container_width=True, hide_index=True)
         
-        # --- 엑셀(CSV) 다운로드 버튼 추가 ---
         csv_data = res_df.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
             label="📥 포지션 대응 알림판 엑셀(CSV) 다운로드",
@@ -276,7 +283,7 @@ with tab0:
 # =========================================================
 with tab1:
     st.subheader("🔍 관심종목 발굴 스캐너")
-    tickers_input = st.text_input("스캔할 관심 종목 리스트 (쉼표 구분 - 국내 주식은 숫자만 입력 가능)", "AAPL, 005930, 000660,066570,005380,")
+    tickers_input = st.text_input("스캔할 관심 종목 리스트 (쉼표 구분 - 국내 주식은 숫자만 입력 가능)", "AAPL, 005930")
     
     scan_tickers_raw = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
     scan_tickers = []
@@ -306,6 +313,7 @@ with tab1:
         if df is not None and not df.empty:
             latest = df.iloc[-1]
             c_price = latest['Close']
+            scan_atr = latest['ATR'] # 💥 스캐너 탭에서도 ATR 추출
             
             cond1 = (c_price > latest['SMA_150']) and (c_price > latest['SMA_200'])
             cond2 = latest['SMA_150'] > latest['SMA_200']
@@ -337,6 +345,7 @@ with tab1:
                 "RS Rating": rs_val if rs_val else "-",
                 "수급 신호": vol_info["signal"],
                 "현재가": round(c_price, 2),
+                "최신 ATR": round(scan_atr, 2), # 💥 관심종목 표에도 ATR 자동 계산 열 추가
                 "터틀 진입선": round(latest['Entry_High'], 2),
                 "터틀 청산선": round(latest['Exit_Low'], 2)
             })
@@ -345,68 +354,6 @@ with tab1:
         scan_df = pd.DataFrame(scan_data)
         st.dataframe(scan_df, use_container_width=True, hide_index=True)
         
-        # --- 엑셀(CSV) 다운로드 버튼 추가 ---
         csv_data_scan = scan_df.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
             label="📥 관심종목 스캐너 엑셀(CSV) 다운로드",
-            data=csv_data_scan,
-            file_name=f"Scanner_Results_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-            key='download_scanner'
-        )
-
-# =========================================================
-# 탭 2: 개별 종목 융합 차트 및 세부 계획
-# =========================================================
-with tab2:
-    st.subheader("📈 개별 종목 정밀 융합 차트")
-    all_known_tickers = list(set(scan_tickers + [str(r.get("티커", "")).upper() for _, r in updated_df.iterrows() if r.get("티커")]))
-    all_known_tickers = [t for t in all_known_tickers if t and t != "NAN"]
-    
-    if all_known_tickers:
-        selected_ticker = st.selectbox("분석할 종목을 선택하세요", options=all_known_tickers, format_func=lambda x: f"{resolve_ticker_and_name(x)[1]} ({x})")
-        
-        df_chart = load_and_process_data(selected_ticker, entry_window, exit_window)
-        if df_chart is not None and not df_chart.empty:
-            df_plot = df_chart.tail(200).copy()
-            df_plot['Buy_Signal'] = (df_plot['Close'] > df_plot['Entry_High']) & (df_plot['Close'].shift(1) <= df_plot['Entry_High'].shift(1))
-            df_plot['Sell_Signal'] = (df_plot['Close'] < df_plot['Exit_Low']) & (df_plot['Close'].shift(1) >= df_plot['Exit_Low'].shift(1))
-            
-            fig = go.Figure()
-            fig.add_trace(go.Candlestick(x=df_plot.index, open=df_plot['Open'], high=df_plot['High'], low=df_plot['Low'], close=df_plot['Close'], name='가격'))
-            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['SMA_50'], line=dict(color='orange', width=1.5), name='50일선'))
-            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['SMA_200'], line=dict(color='purple', width=2), name='200일선'))
-            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Entry_High'], line=dict(color='blue', dash='dot'), name='터틀 진입선'))
-            fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Exit_Low'], line=dict(color='red', dash='dot'), name='터틀 청산선'))
-            
-            buy_signals = df_plot[df_plot['Buy_Signal']]
-            sell_signals = df_plot[df_plot['Sell_Signal']]
-            fig.add_trace(go.Scatter(x=buy_signals.index, y=buy_signals['Close'], mode='markers', marker=dict(symbol='triangle-up', color='green', size=13), name='터틀 돌파'))
-            fig.add_trace(go.Scatter(x=sell_signals.index, y=sell_signals['Close'], mode='markers', marker=dict(symbol='triangle-down', color='red', size=13), name='터틀 이탈'))
-            
-            fig.update_layout(title=f'{resolve_ticker_and_name(selected_ticker)[1]} ({selected_ticker}) — 분석 차트', xaxis_rangeslider_visible=False, template='plotly_white', height=600)
-            st.plotly_chart(fig, use_container_width=True)
-            
-            st.subheader("🐢 터틀 피라미딩 & 손절 세부 계획")
-            latest = df_chart.iloc[-1]
-            atr = latest['ATR']
-            entry_price = latest['Entry_High']
-            
-            if not pd.isna(atr) and not pd.isna(entry_price) and atr > 0:
-                risk_amount = account_size * risk_per_trade
-                unit_shares = int(risk_amount / atr)
-                
-                plan_rows = []
-                for unit_n in range(1, max_units + 1):
-                    add_price = entry_price + 0.5 * atr * (unit_n - 1)
-                    plan_rows.append({
-                        "유닛 단계": f"{unit_n}유닛",
-                        "추가 매수 기준가": round(add_price, 2),
-                        "유닛당 매수량": f"{unit_shares} 주",
-                        "최종 누적 물량": f"{unit_shares * unit_n} 주",
-                    })
-                st.dataframe(pd.DataFrame(plan_rows), use_container_width=True, hide_index=True)
-        else:
-            st.warning("해당 종목의 차트 데이터를 불러올 수 없습니다.")
-    else:
-        st.info("스캐너 혹은 포지션 관리 테이블에 종목을 입력하시면 차트 탭이 활성화됩니다.")
